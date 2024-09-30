@@ -2,7 +2,7 @@
 FROM debian:latest
 
 # Update package list and install curl
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl
 
 # Copy the command script into the image
 COPY run-commands.sh /usr/local/bin/run-commands.sh
