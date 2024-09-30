@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  dind:
+    image: docker:20.10.7-dind
+    privileged: true
+    networks:
+      my_custom_network:
+        ipv4_address: 192.168.1.5
+    volumes:
+      - /var/lib/docker
+      - /var/run/docker.sock:/var/run/docker.sock  # Share Docker socket for DinD
+
+  traefik:
+    image: traefik:v2.5
+    command:
+      - "--api.insecure=true"  # Enable the Traefik dashboard (not for production)
+      - "--providers.docker=true"  # Enable Docker provider
+      - "--entrypoints.web.address=:80"  # Listen on port 80
+    ports:
+      - "80:80"  # Expose port 80
+      - "8080:8080"  # Expose the Traefik dashboard
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"  # Access Docker socket
+
+  subdocker-1:
+    build:
+      context: ./subdocker-1
+    networks:
+      my_custom_network:
+        ipv4_address: 192.168.1.10
+    volumes:
+      - subdocker-1-data:/data  # Volume for persistent storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]  # Change the URL to match your service
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  subdocker-2:
+    image: nginx:latest
+    networks:
+      my_custom_network:
+        ipv4_address: 192.168.1.20
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]  # Optional health check for Docker Hub image
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  my_custom_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+
+volumes:
+  subdocker-1-data:  # Named volume definition for persistent storage
