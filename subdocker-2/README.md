@@ -17,7 +17,8 @@ running as a non-root user (uid 101) on port 8080.
   the nginx version.
 - `html/index.html`: the page served at `/`.
 
-After editing either file, restart the service:
+Changes under `html/` show up on the next page load. After editing
+`default.conf`, restart the service:
 
 ```bash
 docker compose exec dind docker compose -f /workspace/stack/compose.yaml restart subdocker-2
