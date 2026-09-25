@@ -1,0 +1,146 @@
+# Inner stack, run inside the dind daemon by setup.sh. Relative paths resolve
+# inside the dind container, where the repo is mounted read-only at /workspace.
+#
+# Network layout:
+#   ingress      traefik                    published port, not internal
+#   socket       traefik, socket-proxy      internal, no egress
+#   web-backend  traefik, subdocker-2       internal, no egress
+#   egress       subdocker-1                outbound access for curl
+
+name: dind-stack
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # Read-only API filter for Traefik's Docker provider.
+  socket-proxy:
+    <<: *hardening
+    image: wollomatic/socket-proxy:1.13.1@sha256:3935b709275e4ec35d6ed5a5c4a1f0d01ed31eec5e7234efc3357ecd47689002
+    # nobody, plus the group that owns the inner docker.sock.
+    user: "65534:${DOCKER_SOCKET_GID:-2375}"
+    command:
+      - -loglevel=info
+      - -listenip=0.0.0.0
+      - -allowfrom=traefik
+      - -allowHEAD=^/_ping$$
+      - -allowGET=^/(v1\.[0-9]+/)?(_ping|version|events|containers/json|containers/[a-zA-Z0-9_.-]+/json)(\?.*)?$$
+      - -allowhealthcheck
+      - -watchdoginterval=300
+      - -stoponwatchdog
+      - -shutdowngracetime=5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD", "./healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 64m
+    pids_limit: 64
+
+  traefik:
+    <<: *hardening
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    user: "65534:65534"
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --accesslog=true
+      # Unprivileged port, so Traefik runs as nobody with no capabilities.
+      - --entrypoints.web.address=:8000
+      # Ping on the internal :8080 entrypoint (not published). No dashboard.
+      - --ping=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=dind-web-backend
+    ports:
+      - "80:8000"
+    networks: [ingress, socket, web-backend]
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+    pids_limit: 128
+
+  # Built locally. Runs its startup commands, then stays up for exec.sh.
+  subdocker-1:
+    <<: *hardening
+    build:
+      context: ../subdocker-1
+    image: dind-stack/subdocker-1:local
+    init: true
+    environment:
+      TARGET_URL: ${TARGET_URL:-https://example.com}
+    volumes:
+      - subdocker-1-data:/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [egress]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+    mem_limit: 128m
+    pids_limit: 64
+
+  # Pre-built image; config mounted from ../subdocker-2. Only Traefik reaches it.
+  subdocker-2:
+    <<: *hardening
+    image: nginxinc/nginx-unprivileged:1.30.5-alpine3.24@sha256:4714e0b1b2577eaa1a6131d07c958b67f0eb68e6d0521e90c6e5287db8cf0bc5
+    volumes:
+      - ../subdocker-2/nginx:/etc/nginx/conf.d:ro
+      - ../subdocker-2/html:/usr/share/nginx/html:ro
+    tmpfs:
+      - /tmp:size=16m,uid=101,gid=101,mode=0700
+    networks: [web-backend]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.subdocker-2.rule: PathPrefix(`/`)
+      traefik.http.routers.subdocker-2.entrypoints: web
+      traefik.http.routers.subdocker-2.middlewares: subdocker-2-headers
+      traefik.http.services.subdocker-2.loadbalancer.server.port: "8080"
+      traefik.http.middlewares.subdocker-2-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.subdocker-2-headers.headers.frameDeny: "true"
+      traefik.http.middlewares.subdocker-2-headers.headers.referrerPolicy: no-referrer
+      traefik.http.middlewares.subdocker-2-headers.headers.contentSecurityPolicy: default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
+      traefik.http.middlewares.subdocker-2-headers.headers.permissionsPolicy: camera=(), geolocation=(), microphone=()
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    mem_limit: 128m
+    pids_limit: 64
+
+networks:
+  ingress:
+    name: dind-ingress
+  socket:
+    name: dind-socket
+    internal: true
+  web-backend:
+    name: dind-web-backend
+    internal: true
+  egress:
+    name: dind-egress
+
+volumes:
+  subdocker-1-data:

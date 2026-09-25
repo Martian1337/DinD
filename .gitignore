@@ -1,0 +1,4 @@
+# Local configuration and customizations
+.env
+compose.override.yaml
+stack/compose.override.yaml

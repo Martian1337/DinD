@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHELLCHECK_IMAGE: koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: >-
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" -x
+          setup.sh teardown.sh exec.sh scripts/common.sh subdocker-1/run-commands.sh
+
+      - name: hadolint
+        run: docker run --rm -i -v "$PWD/.hadolint.yaml:/.config/hadolint.yaml:ro" "$HADOLINT_IMAGE" < subdocker-1/Dockerfile
+
+      - name: Validate compose files
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f stack/compose.yaml config --quiet
+
+  e2e:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Start the stack
+        run: ./setup.sh
+
+      - name: subdocker-2 is served through Traefik with security headers
+        run: |
+          headers="$(mktemp)"
+          body="$(curl -fsS --retry 5 --retry-connrefused -D "$headers" http://127.0.0.1:8080/)"
+          grep -q '<h1>subdocker-2</h1>' <<<"$body"
+          grep -qi '^x-content-type-options: nosniff' "$headers"
+          grep -qi '^x-frame-options: deny' "$headers"
+          grep -qi '^content-security-policy:' "$headers"
+
+      - name: Only GET and HEAD are accepted
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/)" = 403
+
+      - name: Traefik dashboard and API are not exposed
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/dashboard/)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/rawdata)" = 404
+
+      - name: The inner daemon has no TCP listener
+        run: |
+          listeners="$(docker compose exec -T dind netstat -ltn 2>/dev/null || true)"
+          grep -q '^Proto' <<<"$listeners"
+          if grep -E ':(2375|2376)\b' <<<"$listeners"; then
+            echo "dockerd is listening on TCP" >&2
+            exit 1
+          fi
+
+      - name: subdocker-1 ran its startup commands as a non-root user
+        run: |
+          ./exec.sh subdocker-1 cat /data/runs.log
+          test "$(./exec.sh subdocker-1 id -u)" = 10001
+
+      - name: Data survives a teardown
+        run: |
+          ./teardown.sh
+          ./setup.sh
+          runs="$(./exec.sh subdocker-1 sh -c 'wc -l < /data/runs.log')"
+          test "$runs" -ge 2
+
+      - name: Logs
+        if: failure()
+        run: |
+          docker compose logs --no-color dind || true
+          source scripts/common.sh && inner_compose logs --no-color || true
+
+      - name: Tear down
+        if: always()
+        run: ./teardown.sh --volumes

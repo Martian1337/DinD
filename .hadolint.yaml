@@ -1,0 +1,5 @@
+# DL3008 (pin apt versions): Debian removes old versions from its mirrors after
+# security updates, so pins break builds. The base image is digest-pinned.
+ignored:
+  - DL3008
+failure-threshold: info

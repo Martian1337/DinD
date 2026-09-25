@@ -1,0 +1,45 @@
+# Host level: the Docker-in-Docker daemon only. The inner stack lives in
+# stack/compose.yaml and is deployed into this daemon by setup.sh.
+
+name: dind
+
+services:
+  dind:
+    image: docker:29.8.1-dind@sha256:3f3c01aaaebf7cce837356b688b7c059a4749f10bd7660dec7c58fc454a283f0
+    hostname: dind
+    # Required for DinD. Root-equivalent on the host; see README.md.
+    privileged: true
+    # An explicit dockerd command skips the image's default TCP listener
+    # (2375/2376), leaving only the unix socket.
+    command:
+      - dockerd
+      - --host=unix:///var/run/docker.sock
+      - --log-driver=json-file
+      - --log-opt=max-size=10m
+      - --log-opt=max-file=3
+    environment:
+      # No TCP listener, so no TLS certs needed.
+      DOCKER_TLS_CERTDIR: ""
+    ports:
+      # Inner Traefik publishes :80 on this container.
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+    volumes:
+      # Inner images, containers, and volumes.
+      - dind-data:/var/lib/docker
+      # Build contexts, config, and the inner compose file.
+      - ./:/workspace:ro
+    healthcheck:
+      test: ["CMD", "docker", "info", "--format", "{{.ServerVersion}}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dind-data:
