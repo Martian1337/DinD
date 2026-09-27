@@ -104,7 +104,7 @@ services:
   # Pre-built image; config mounted from ../subdocker-2. Only Traefik reaches it.
   subdocker-2:
     <<: *hardening
-    image: nginxinc/nginx-unprivileged:1.30.5-alpine3.24@sha256:4714e0b1b2577eaa1a6131d07c958b67f0eb68e6d0521e90c6e5287db8cf0bc5
+    image: nginxinc/nginx-unprivileged:1.31.5-alpine3.24@sha256:19c132c9ab02d3b783f478743dafc7a7f42e27aa7d2bdcbec1bb1128ca8f2a07
     volumes:
       - ../subdocker-2/nginx:/etc/nginx/conf.d:ro
       - ../subdocker-2/html:/usr/share/nginx/html:ro
