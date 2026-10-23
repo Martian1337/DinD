@@ -5,7 +5,7 @@ name: dind
 
 services:
   dind:
-    image: docker:29.8.1-dind@sha256:3f3c01aaaebf7cce837356b688b7c059a4749f10bd7660dec7c58fc454a283f0
+    image: docker:29.9.1-dind@sha256:3e5756e2b6dad6a5f1f5deacf0a19f9eaa2581b76ae092b2d4a118162e1d4d4e
     hostname: dind
     # Required for DinD. Root-equivalent on the host; see README.md.
     privileged: true
