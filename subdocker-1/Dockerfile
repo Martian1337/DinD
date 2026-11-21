@@ -1,5 +1,5 @@
 # subdocker-1: Debian with curl.
-FROM debian:trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
